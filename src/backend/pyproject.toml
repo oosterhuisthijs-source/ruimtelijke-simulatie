@@ -1,0 +1,24 @@
+[project]
+name = "ruimtelijke-simulatie-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "duckdb>=1.1",
+    "deltalake>=0.20",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "minisom>=2.3",
+    "ollama>=0.3",
+    "httpx>=0.27",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
