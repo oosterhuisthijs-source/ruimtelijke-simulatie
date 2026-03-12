@@ -1,11 +1,19 @@
-import { type Ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { H3HexagonLayer } from '@deck.gl/geo-layers'
 
+export interface HoveredInfo {
+  x: number
+  y: number
+  object: any
+}
+
 export function useMap(container: Ref<HTMLElement | undefined>) {
   let overlay: MapboxOverlay | null = null
   let map: maplibregl.Map | null = null
+
+  const hoveredInfo = ref<HoveredInfo | null>(null)
 
   async function initMap() {
     if (!container.value) return
@@ -25,7 +33,8 @@ export function useMap(container: Ref<HTMLElement | undefined>) {
   function updateHexagons(
     data: any[],
     valueColumn: string,
-    onClick?: (h3: string, value: number) => void
+    onClick?: (h3: string, value: number) => void,
+    baseData?: any[]
   ) {
     if (!overlay) return
 
@@ -33,11 +42,22 @@ export function useMap(container: Ref<HTMLElement | undefined>) {
     const min = Math.min(...values)
     const max = Math.max(...values)
 
+    // Build diff lookup if baseData provided
+    const baseMap = baseData
+      ? new Map(baseData.map((d) => [d.h3, d[valueColumn]]))
+      : null
+
     const layer = new H3HexagonLayer({
       id: 'h3-layer',
       data,
       getHexagon: (d: any) => d.h3,
       getFillColor: (d: any) => {
+        // Diff mode: orange = changed, grey = stable
+        if (baseMap) {
+          const changed = baseMap.get(d.h3) !== d[valueColumn]
+          return changed ? [255, 120, 0, 220] : [80, 80, 80, 100]
+        }
+        // Normal mode: blue → red gradient
         const v = d[valueColumn] ?? 0
         const t = max === min ? 0.5 : (v - min) / (max - min)
         return [
@@ -49,6 +69,11 @@ export function useMap(container: Ref<HTMLElement | undefined>) {
       },
       extruded: false,
       pickable: true,
+      onHover: (info: any) => {
+        hoveredInfo.value = info.object
+          ? { x: info.x, y: info.y, object: info.object }
+          : null
+      },
       onClick: onClick
         ? (info: any) => {
             if (info.object) {
@@ -61,5 +86,5 @@ export function useMap(container: Ref<HTMLElement | undefined>) {
     overlay.setProps({ layers: [layer] })
   }
 
-  return { initMap, updateHexagons }
+  return { initMap, updateHexagons, hoveredInfo }
 }

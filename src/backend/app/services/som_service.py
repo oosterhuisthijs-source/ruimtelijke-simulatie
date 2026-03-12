@@ -120,6 +120,18 @@ SOM_COLUMNS = [
 ]
 
 
+# Key variables to include in cluster map for tooltips
+TOOLTIP_COLUMNS = [
+    "gemeentenaam",
+    "wijknaam",
+    "aantal_inwoners_sum",
+    "gemiddelde_woz_waarde_woning_area_weighted_average",
+    "hitte",
+    "geluid_lden",
+    "bebouwing_in_primair_bebouwd_gebied_fraction",
+]
+
+
 class SOMService:
     def __init__(self, df: pd.DataFrame):
         self.df = df
@@ -127,22 +139,20 @@ class SOMService:
         self.trained = False
         self.feature_matrix = None
         self.h3_ids = None
+        self._cluster_cache: dict[int, list[dict]] = {}  # year → cluster list
 
     async def train(self):
         """Train SOM on all hexagons for year 2023."""
         df_2023 = self.df[self.df["year_int"] == 2023].copy()
 
-        # Select and clean feature columns
         available = [c for c in SOM_COLUMNS if c in df_2023.columns]
         features = df_2023[available].fillna(0).values
 
-        # Normalize to 0-1
         col_max = features.max(axis=0)
-        col_max[col_max == 0] = 1  # avoid division by zero
+        col_max[col_max == 0] = 1
         self.feature_matrix = features / col_max
         self.h3_ids = df_2023["h3_id"].values
 
-        # Train SOM
         self.som = MiniSom(
             x=settings.som_grid_x,
             y=settings.som_grid_y,
@@ -155,21 +165,59 @@ class SOMService:
         self.som.train(self.feature_matrix, settings.som_iterations)
         self.trained = True
 
-    def get_cluster_map(self) -> list[dict]:
-        """Return h3_id + SOM cluster (x,y) for all hexagons."""
-        if not self.trained:
-            return []
+        # Precompute 2023 cluster map
+        self._cluster_cache[2023] = self._compute_cluster_map(df_2023)
+
+    def _compute_cluster_map(self, df_year: pd.DataFrame) -> list[dict]:
+        """Compute cluster assignments for a given year's DataFrame."""
+        available = [c for c in SOM_COLUMNS if c in df_year.columns]
+        features = df_year[available].fillna(0).values.astype(float)
+        col_max = self.feature_matrix.max(axis=0)
+        col_max[col_max == 0] = 1
+        features_norm = features / col_max
+
+        # Build tooltip lookup
+        tooltip_cols = [c for c in TOOLTIP_COLUMNS if c in df_year.columns]
+        tooltip_data = df_year[tooltip_cols].to_dict(orient="records")
 
         results = []
-        for i, vec in enumerate(self.feature_matrix):
+        for i, vec in enumerate(features_norm):
             x, y = self.som.winner(vec)
-            results.append({
-                "h3": self.h3_ids[i],
+            entry = {
+                "h3": df_year["h3_id"].iloc[i],
                 "cluster_x": int(x),
                 "cluster_y": int(y),
                 "cluster_id": int(x * settings.som_grid_y + y),
-            })
+            }
+            # Add tooltip fields with rounding for floats, None for NaN
+            for col in tooltip_cols:
+                val = tooltip_data[i].get(col)
+                if val is None:
+                    entry[col] = None
+                elif isinstance(val, float):
+                    import math
+                    entry[col] = None if math.isnan(val) else round(val, 1)
+                else:
+                    entry[col] = val
+            results.append(entry)
         return results
+
+    def get_cluster_map(self) -> list[dict]:
+        """Return cluster map for 2023 (cached)."""
+        return self._cluster_cache.get(2023, [])
+
+    def get_cluster_map_for_year(self, year: int) -> list[dict]:
+        """Return cluster map for any year, with lazy caching."""
+        if year in self._cluster_cache:
+            return self._cluster_cache[year]
+        if not self.trained:
+            return []
+        df_year = self.df[self.df["year_int"] == year].copy()
+        if df_year.empty:
+            return []
+        result = self._compute_cluster_map(df_year)
+        self._cluster_cache[year] = result
+        return result
 
     def project_trend(self, target_year: int) -> tuple[np.ndarray, np.ndarray]:
         """Project all hexagon features to target_year using linear trend from 2018-2023."""

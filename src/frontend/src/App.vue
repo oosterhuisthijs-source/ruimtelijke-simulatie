@@ -5,18 +5,17 @@
 
       <!-- Mode selector -->
       <div class="mode-selector">
-        <button :class="{ active: mode === 'clusters' }" @click="mode = 'clusters'">
-          Clusters
-        </button>
-        <button :class="{ active: mode === 'trajectory' }" @click="mode = 'trajectory'">
-          Traject
-        </button>
-        <button :class="{ active: mode === 'scenario' }" @click="mode = 'scenario'">
-          Scenario
-        </button>
-        <button :class="{ active: mode === 'trend' }" @click="mode = 'trend'">
-          Trend
-        </button>
+        <button :class="{ active: mode === 'clusters' }" @click="mode = 'clusters'">Clusters</button>
+        <button :class="{ active: mode === 'trajectory' }" @click="mode = 'trajectory'">Traject</button>
+        <button :class="{ active: mode === 'scenario' }" @click="mode = 'scenario'">Scenario</button>
+        <button :class="{ active: mode === 'trend' }" @click="mode = 'trend'">Trend</button>
+        <button :class="{ active: mode === 'chat' }" @click="mode = 'chat'">Chat</button>
+      </div>
+
+      <!-- Jaar slider (altijd zichtbaar in kaart-modi) -->
+      <div v-if="mode !== 'scenario' && mode !== 'trend' && mode !== 'chat'" class="controls">
+        <label>Jaar: {{ mapYear }}</label>
+        <input type="range" min="2018" max="2023" step="1" v-model.number="mapYear" @change="loadYear" />
       </div>
 
       <!-- Scenario controls -->
@@ -30,31 +29,24 @@
           <option value="loofbos_fraction">Loofbos</option>
           <option value="hitte">Hitte</option>
         </select>
-
         <label>Verandering: {{ Math.round((scenarioFactor - 1) * 100) }}%</label>
-        <input
-          type="range"
-          min="0.5"
-          max="1.5"
-          step="0.05"
-          v-model.number="scenarioFactor"
-          @change="runScenario"
-        />
-
+        <input type="range" min="0.5" max="1.5" step="0.05" v-model.number="scenarioFactor" @change="runScenario" />
         <button @click="runScenario">Simuleer</button>
+        <div v-if="scenarioDone" class="diff-legend">
+          <span class="dot shifted" /> Verschoven cluster
+          <span class="dot stable" /> Stabiel
+        </div>
       </div>
 
       <!-- Trend controls -->
       <div v-if="mode === 'trend'" class="controls">
         <label>Doeljaar: {{ trendYear }}</label>
-        <input
-          type="range"
-          min="2024"
-          max="2035"
-          step="1"
-          v-model.number="trendYear"
-        />
+        <input type="range" min="2024" max="2035" step="1" v-model.number="trendYear" />
         <button @click="runTrend">Projecteer trend</button>
+        <div v-if="trendDone" class="diff-legend">
+          <span class="dot shifted" /> Verschoven cluster
+          <span class="dot stable" /> Stabiel
+        </div>
       </div>
 
       <!-- Trajectory info -->
@@ -75,7 +67,39 @@
     </aside>
 
     <!-- Map -->
-    <div ref="mapContainer" class="map-container" />
+    <div class="map-container">
+      <div ref="mapContainer" class="map-inner" />
+
+      <!-- Tooltip -->
+      <div
+        v-if="hoveredInfo"
+        class="map-tooltip"
+        :style="{ left: hoveredInfo.x + 'px', top: hoveredInfo.y + 'px' }"
+      >
+        <div class="tooltip-gemeente">{{ hoveredInfo.object.gemeentenaam }}</div>
+        <div class="tooltip-wijk">{{ hoveredInfo.object.wijknaam }}</div>
+        <div class="tooltip-row">
+          <span>Cluster</span><span>{{ hoveredInfo.object.cluster_id }}</span>
+        </div>
+        <div v-if="hoveredInfo.object.aantal_inwoners_sum > 0" class="tooltip-row">
+          <span>Inwoners</span><span>{{ hoveredInfo.object.aantal_inwoners_sum }}</span>
+        </div>
+        <div v-if="hoveredInfo.object.gemiddelde_woz_waarde_woning_area_weighted_average > 0" class="tooltip-row">
+          <span>WOZ</span><span>{{ hoveredInfo.object.gemiddelde_woz_waarde_woning_area_weighted_average }}</span>
+        </div>
+        <div v-if="hoveredInfo.object.hitte > 0" class="tooltip-row">
+          <span>Hitte</span><span>{{ hoveredInfo.object.hitte }}</span>
+        </div>
+      </div>
+
+      <!-- Legend -->
+      <MapLegend class="map-legend" />
+    </div>
+
+    <!-- Chat panel -->
+    <div v-if="mode === 'chat'" class="chat-container">
+      <ChatPanel @highlight="onHighlight" />
+    </div>
   </div>
 </template>
 
@@ -84,19 +108,24 @@ import { ref, onMounted, watch } from 'vue'
 import { useMap } from './composables/useMap'
 import { useSOM } from './composables/useSOM'
 import { useInsight } from './composables/useInsight'
+import ChatPanel from './components/chat/ChatPanel.vue'
+import MapLegend from './components/map/MapLegend.vue'
 
 const mapContainer = ref<HTMLElement>()
-const mode = ref<'clusters' | 'trajectory' | 'scenario' | 'trend'>('clusters')
+const mode = ref<'clusters' | 'trajectory' | 'scenario' | 'trend' | 'chat'>('clusters')
 const scenarioColumn = ref('aantal_inwoners_sum')
 const scenarioFactor = ref(1.0)
 const trendYear = ref(2030)
+const mapYear = ref(2023)
 const selectedHex = ref<string>('')
 const trajectory = ref<any[]>([])
 const insight = ref<string>('')
 const insightLoading = ref(false)
+const scenarioDone = ref(false)
+const trendDone = ref(false)
 let originalClusters: any[] = []
 
-const { initMap, updateHexagons } = useMap(mapContainer)
+const { initMap, updateHexagons, hoveredInfo } = useMap(mapContainer)
 const { fetchClusters, fetchTrajectory, runScenarioRequest, runTrendRequest } = useSOM()
 const { getClusterInsight, getTrajectoryInsight, getScenarioInsight, getTrendInsight } = useInsight()
 
@@ -109,12 +138,20 @@ onMounted(async () => {
 
 watch(mode, async (newMode) => {
   insight.value = ''
+  scenarioDone.value = false
+  trendDone.value = false
   if (newMode === 'clusters') {
-    const clusters = await fetchClusters()
+    const clusters = await fetchClusters(mapYear.value)
     originalClusters = clusters
     updateHexagons(clusters, 'cluster_id', onHexClick)
   }
 })
+
+async function loadYear() {
+  const clusters = await fetchClusters(mapYear.value)
+  originalClusters = clusters
+  updateHexagons(clusters, 'cluster_id', onHexClick)
+}
 
 async function onHexClick(h3: string, clusterId: number) {
   selectedHex.value = h3
@@ -138,8 +175,10 @@ async function onHexClick(h3: string, clusterId: number) {
 }
 
 async function runTrend() {
+  trendDone.value = false
   const results = await runTrendRequest(trendYear.value)
-  updateHexagons(results, 'cluster_id', onHexClick)
+  updateHexagons(results, 'cluster_id', onHexClick, originalClusters)
+  trendDone.value = true
   insightLoading.value = true
   insight.value = '...'
   const result = await getTrendInsight(trendYear.value, originalClusters, results)
@@ -148,9 +187,10 @@ async function runTrend() {
 }
 
 async function runScenario() {
+  scenarioDone.value = false
   const results = await runScenarioRequest(scenarioColumn.value, scenarioFactor.value)
-  updateHexagons(results, 'cluster_id', onHexClick)
-
+  updateHexagons(results, 'cluster_id', onHexClick, originalClusters)
+  scenarioDone.value = true
   insightLoading.value = true
   insight.value = '...'
   const result = await getScenarioInsight(
@@ -161,6 +201,15 @@ async function runScenario() {
   )
   insight.value = result.insight
   insightLoading.value = false
+}
+
+function onHighlight(h3Ids: string[], label: string) {
+  if (!originalClusters.length) return
+  const idSet = new Set(h3Ids)
+  const filtered = originalClusters.filter((c) => idSet.has(c.h3))
+  if (filtered.length > 0) {
+    updateHexagons(filtered, 'cluster_id', onHexClick)
+  }
 }
 </script>
 
@@ -181,6 +230,7 @@ async function runScenario() {
   gap: 1rem;
   overflow-y: auto;
   z-index: 10;
+  flex-shrink: 0;
 }
 
 h1 {
@@ -191,18 +241,20 @@ h1 {
 
 .mode-selector {
   display: flex;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .mode-selector button {
   flex: 1;
+  min-width: 60px;
   padding: 0.4rem;
   border: 1px solid #444;
   background: transparent;
   color: #ccc;
   cursor: pointer;
   border-radius: 4px;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
 }
 
 .mode-selector button.active {
@@ -236,6 +288,24 @@ h1 {
   cursor: pointer;
   font-weight: 600;
 }
+
+.diff-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #aaa;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.shifted { background: rgb(255, 120, 0); }
+.dot.stable { background: rgb(80, 80, 80); }
 
 .trajectory-info {
   font-size: 0.8rem;
@@ -271,5 +341,67 @@ h1 {
 .map-container {
   flex: 1;
   position: relative;
+  overflow: hidden;
+}
+
+.map-inner {
+  width: 100%;
+  height: 100%;
+}
+
+.map-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(10, 10, 25, 0.92);
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  color: #eee;
+  z-index: 20;
+  transform: translate(14px, -50%);
+  white-space: nowrap;
+  min-width: 160px;
+}
+
+.tooltip-gemeente {
+  font-weight: 600;
+  color: #a8d8ea;
+  margin-bottom: 0.1rem;
+}
+
+.tooltip-wijk {
+  color: #888;
+  font-size: 0.72rem;
+  margin-bottom: 0.3rem;
+}
+
+.tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: #ccc;
+  border-top: 1px solid #2a2a3a;
+  padding-top: 0.15rem;
+  margin-top: 0.15rem;
+}
+
+.tooltip-row span:first-child { color: #888; }
+
+.map-legend {
+  position: absolute;
+  bottom: 1.5rem;
+  right: 1rem;
+  z-index: 10;
+}
+
+.chat-container {
+  width: 420px;
+  border-left: 1px solid #222;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 </style>

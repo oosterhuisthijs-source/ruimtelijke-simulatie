@@ -1,8 +1,8 @@
 const API = 'http://localhost:8002/api'
 
 export function useSOM() {
-  async function fetchClusters() {
-    const res = await fetch(`${API}/som/clusters`)
+  async function fetchClusters(year: number = 2023) {
+    const res = await fetch(`${API}/som/clusters?year=${year}`)
     return res.json()
   }
 

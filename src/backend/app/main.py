@@ -25,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import som, scenario, trajectory, health, insight, trend  # noqa: E402
+from app.routers import som, scenario, trajectory, health, insight, trend, agent  # noqa: E402
 
 app.include_router(health.router)
 app.include_router(som.router, prefix="/api/som")
@@ -33,3 +33,4 @@ app.include_router(trajectory.router, prefix="/api/trajectory")
 app.include_router(scenario.router, prefix="/api/scenario")
 app.include_router(insight.router, prefix="/api/insight")
 app.include_router(trend.router, prefix="/api/trend")
+app.include_router(agent.router, prefix="/api/agent")

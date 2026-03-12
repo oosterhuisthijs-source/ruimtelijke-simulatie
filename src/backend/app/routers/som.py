@@ -4,9 +4,11 @@ router = APIRouter()
 
 
 @router.get("/clusters")
-async def get_clusters(request: Request):
-    """Return SOM cluster assignment for all hexagons."""
-    return request.app.state.som.get_cluster_map()
+async def get_clusters(request: Request, year: int = 2023):
+    """Return SOM cluster assignment for all hexagons, optionally for a specific year."""
+    if year == 2023:
+        return request.app.state.som.get_cluster_map()
+    return request.app.state.som.get_cluster_map_for_year(year)
 
 
 @router.get("/grid")
